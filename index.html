@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="ko"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>알림함</title>
+<link rel="manifest" href="manifest.json"><link rel="icon" href="icon-192.png"><link rel="apple-touch-icon" href="icon-180.png">
+<meta name="theme-color" content="#10151b">
+<style>
+:root{--bg:#eef1f4;--sf:#fff;--ink:#16202b;--mut:#5b6776;--ac:#0b6b6b;--unr:#c98f00;--ln:#d9dee4;color-scheme:light dark}
+@media(prefers-color-scheme:dark){:root{--bg:#10151b;--sf:#182029;--ink:#e6ebf0;--mut:#93a0ae;--ac:#4fc1b8;--unr:#e8b020;--ln:#26313c}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 Pretendard,"Apple SD Gothic Neo","Noto Sans KR",system-ui,sans-serif}
+main{max-width:640px;margin:0 auto;padding:20px 16px 64px}
+header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:12px}
+h1{font-size:1.5rem;margin:0}#count{color:var(--mut);font-size:.9rem}
+button,input,textarea{font:inherit;color:inherit}
+button{background:none;border:1px solid var(--ln);border-radius:6px;padding:4px 12px;cursor:pointer}
+button:hover{border-color:var(--ac)}button.p{background:var(--ac);border-color:var(--ac);color:var(--bg)}
+:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+input,textarea{width:100%;background:var(--sf);border:1px solid var(--ln);border-radius:6px;padding:8px 10px}
+details{background:var(--sf);border:1px solid var(--ln);border-radius:8px;padding:10px 14px;margin-bottom:14px}
+summary{cursor:pointer;font-weight:600}details>*{margin-top:10px}
+.row{display:flex;gap:8px;flex-wrap:wrap}.row>input{flex:1;min-width:140px}
+#status{color:var(--mut);font-size:.9rem;min-height:1.4em}
+.site{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-top:1px solid var(--ln)}
+.site b{flex:1;min-width:100px}.site button{font-size:.85rem;padding:2px 10px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;flex:none}
+#chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:8px;margin-bottom:6px}
+#chips button{display:flex;align-items:center;gap:6px;white-space:nowrap;border-radius:99px}
+#chips button[aria-pressed=true]{border-color:var(--ac);color:var(--ac);font-weight:600}
+#chips small{color:var(--unr);font-weight:700}
+.bar{display:flex;gap:8px;margin-bottom:6px}.bar input{flex:1}
+.bar button[aria-pressed=true]{border-color:var(--ac);color:var(--ac)}
+h2{font-size:.9rem;color:var(--mut);font-weight:600;margin:22px 0 8px}
+.msg{background:var(--sf);border:1px solid var(--ln);border-left:4px solid var(--c,var(--ln));border-radius:6px;padding:10px 14px;margin-bottom:8px}
+.msg.unread strong::before{content:"● ";color:var(--unr)}
+.msg:not(.unread) strong{font-weight:500}
+.msg .t{display:flex;justify-content:space-between;gap:12px}.msg strong{overflow-wrap:anywhere}
+.msg time,.msg .s{color:var(--mut);font-size:.85rem}.msg time{white-space:nowrap}
+.msg p{margin:4px 0 8px;overflow-wrap:anywhere;white-space:pre-wrap}
+.msg .a{display:flex;gap:6px;align-items:center}.msg .a button{font-size:.85rem;padding:2px 10px}.msg .s{margin-left:auto}
+.empty{color:var(--mut);text-align:center;padding:40px 0}
+</style></head>
+<body><main>
+<header><h1>알림함</h1><span id="count"></span></header>
+
+<details id="setup"><summary>사이트 관리</summary>
+  <div id="sites"></div>
+  <div class="row"><input id="n" placeholder="사이트 이름" aria-label="사이트 이름" maxlength="30"><input id="k" placeholder="VAPID 공개키" aria-label="VAPID 공개키" autocomplete="off" spellcheck="false"></div>
+  <button class="p" id="add">사이트 추가</button>
+  <textarea id="out" rows="3" readonly placeholder="사이트를 추가하면 구독 정보(JSON)가 여기에 표시됩니다. 그 사이트의 발송 쪽에 이 값을 등록하세요."></textarea>
+  <div id="status" role="status"></div>
+</details>
+
+<div id="chips" role="group" aria-label="사이트별 보기"></div>
+<div class="bar">
+  <input id="q" type="search" placeholder="알림 검색" aria-label="알림 검색">
+  <button id="f" aria-pressed="false">안 읽음만</button>
+  <button id="allread">모두 읽음</button>
+</div>
+<div id="list"></div>
+</main>
+<script src="db.js"></script>
+<script>
+const $ = s => document.querySelector(s), SLOTS = 10;
+const COLORS = ['#0b8f8f', '#c2410c', '#6d4fd1', '#b4237a', '#2f7d32', '#1d62c9', '#a16207', '#c0392b', '#0e7490', '#7c5a3a'];
+const say = t => $('#status').textContent = t;
+const b64 = s => Uint8Array.from(atob((s + '='.repeat((4 - s.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+const safeUrl = u => { try { const x = new URL(u, location.href); return /^https?:$/.test(x.protocol) ? x.href : null; } catch { return null; } };
+const btn = (label, fn, cls) => { const b = document.createElement('button'); b.textContent = label; b.onclick = fn; if (cls) b.className = cls; return b; };
+const scope = slot => new URL(`slots/${slot}/`, location.href).href;
+const getReg = slot => navigator.serviceWorker.getRegistration(scope(slot));
+const waitActive = async reg => {
+  const sw = reg.installing || reg.waiting || reg.active;
+  if (sw && sw.state !== 'activated') await new Promise(r => sw.addEventListener('statechange', () => sw.state === 'activated' && r()));
+  return reg;
+};
+let filter = 'all', onlyUnread = false;
+
+async function render() {
+  const [sites, all] = await Promise.all([DB.sites(), DB.all()]);
+  all.sort((a, b) => b.time - a.time);
+  const by = Object.fromEntries(sites.map(s => [s.slot, s]));
+  if (filter !== 'all' && !by[filter]) filter = 'all';
+  const unread = all.filter(m => !m.read), n = slot => unread.filter(m => m.slot === slot).length;
+  $('#count').textContent = unread.length ? `안 읽음 ${unread.length}건` : '모두 읽음';
+  if (navigator.setAppBadge) unread.length ? navigator.setAppBadge(unread.length) : navigator.clearAppBadge();
+
+  const chips = $('#chips'); chips.replaceChildren();
+  const chip = (label, key, color, cnt) => {
+    const b = document.createElement('button'); b.setAttribute('aria-pressed', filter === key);
+    if (color) { const d = document.createElement('span'); d.className = 'dot'; d.style.background = color; b.append(d); }
+    b.append(label); if (cnt) { const s = document.createElement('small'); s.textContent = cnt; b.append(s); }
+    b.onclick = () => { filter = key; render(); }; chips.append(b);
+  };
+  chip('전체', 'all', null, unread.length);
+  sites.sort((a, b) => a.slot - b.slot).forEach(s => chip(s.name, s.slot, s.color, n(s.slot)));
+
+  const sbox = $('#sites'); sbox.replaceChildren();
+  for (const s of sites) {
+    const r = document.createElement('div'); r.className = 'site';
+    const d = document.createElement('span'); d.className = 'dot'; d.style.background = s.color;
+    const nm = document.createElement('b'); nm.textContent = s.name;
+    r.append(d, nm, btn('이름 변경', async () => { const v = prompt('새 이름', s.name); if (v && v.trim()) { s.name = v.trim().slice(0, 30); await DB.putSite(s); render(); } }),
+      btn('구독 정보', () => showSub(s)), btn('테스트', () => testSite(s)), btn('삭제', () => removeSite(s)));
+    sbox.append(r);
+  }
+  if (!sites.length) $('#setup').open = true;
+
+  const q = $('#q').value.trim().toLowerCase();
+  const list = all.filter(m => (filter === 'all' || m.slot === filter) && (!onlyUnread || !m.read) && (!q || (m.title + m.body).toLowerCase().includes(q)));
+  const box = $('#list'); box.replaceChildren();
+  if (!list.length) { box.innerHTML = '<p class="empty">표시할 알림이 없습니다. 사이트를 추가하면 받은 알림이 여기에 쌓입니다.</p>'; return; }
+  let day = '';
+  for (const m of list) {
+    const d = new Date(m.time).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'short' });
+    if (d !== day) { day = d; const h = document.createElement('h2'); h.textContent = d; box.append(h); }
+    const site = by[m.slot], el = document.createElement('article');
+    el.className = 'msg' + (m.read ? '' : ' unread'); if (site) el.style.setProperty('--c', site.color);
+    const t = document.createElement('div'); t.className = 't';
+    const st = document.createElement('strong'); st.textContent = m.title;
+    const tm = document.createElement('time'); tm.textContent = new Date(m.time).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+    t.append(st, tm);
+    const p = document.createElement('p'); p.textContent = m.body;
+    const a = document.createElement('div'); a.className = 'a';
+    a.append(btn(m.read ? '안 읽음으로' : '읽음', async () => { m.read = !m.read; await DB.put(m); render(); }));
+    const link = safeUrl(m.url);
+    if (m.url && link) a.append(btn('열기', async () => { m.read = true; await DB.put(m); window.open(link, '_blank', 'noopener'); render(); }));
+    a.append(btn('삭제', async () => { await DB.del(m.id); render(); }));
+    const sn = document.createElement('span'); sn.className = 's'; sn.textContent = site ? site.name : '삭제된 사이트'; a.append(sn);
+    el.append(t, p, a); box.append(el);
+  }
+}
+
+async function addSite() {
+  const name = $('#n').value.trim(), key = $('#k').value.trim();
+  if (!name || !key) return say('사이트 이름과 VAPID 공개키를 입력하세요.');
+  try { if (b64(key).length !== 65) throw 0; } catch { return say('공개키 형식이 올바르지 않습니다. URL-safe base64 문자열(약 87자)이어야 합니다.'); }
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return say('이 브라우저는 웹 푸시를 지원하지 않습니다. iOS는 홈 화면에 추가한 앱에서 실행하세요.');
+  const sites = await DB.sites();
+  const slot = [...Array(SLOTS).keys()].map(i => i + 1).find(i => !sites.some(s => s.slot === i));
+  if (!slot) return say(`사이트는 최대 ${SLOTS}개까지 등록할 수 있습니다. 안 쓰는 사이트를 삭제하세요.`);
+  if (await Notification.requestPermission() !== 'granted') return say('알림 권한이 필요합니다. 브라우저 설정에서 허용해 주세요.');
+  try {
+    const reg = await waitActive(await navigator.serviceWorker.register(`slots/${slot}/sw.js`, { scope: `slots/${slot}/` }));
+    const old = await reg.pushManager.getSubscription(); if (old) await old.unsubscribe();
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64(key) });
+    await DB.putSite({ slot, name, key, color: COLORS[slot - 1] });
+    $('#out').value = JSON.stringify(sub); $('#n').value = $('#k').value = '';
+    say(`'${name}'을(를) 추가했습니다. 위 구독 정보를 그 사이트의 발송 쪽에 등록하세요.`); render();
+  } catch (e) { say('추가에 실패했습니다: ' + e.message); }
+}
+async function showSub(s) {
+  const reg = await getReg(s.slot), sub = reg && await reg.pushManager.getSubscription();
+  if (!sub) return say('구독 정보가 없습니다. 사이트를 삭제한 뒤 다시 추가하세요.');
+  $('#out').value = JSON.stringify(sub);
+  try { await navigator.clipboard.writeText($('#out').value); say(`'${s.name}' 구독 정보를 복사했습니다.`); } catch { $('#out').select(); say('복사하려면 선택된 내용을 직접 복사하세요.'); }
+}
+async function testSite(s) {
+  const reg = await getReg(s.slot); if (!reg || Notification.permission !== 'granted') return say('알림 권한 또는 등록 상태를 확인하세요.');
+  await DB.add({ slot: s.slot, title: '테스트 알림', body: '이 기기에서 만든 테스트입니다.', url: '', time: Date.now(), read: false });
+  reg.showNotification(`[${s.name}] 테스트 알림`, { body: '이 기기에서 만든 테스트입니다.', icon: 'icon-192.png' }); render();
+}
+async function removeSite(s) {
+  if (!confirm(`'${s.name}' 사이트를 삭제할까요? 이 사이트의 알림 수신이 중단됩니다.`)) return;
+  const reg = await getReg(s.slot);
+  if (reg) { const sub = await reg.pushManager.getSubscription(); if (sub) await sub.unsubscribe(); await reg.unregister(); }
+  if (confirm('이 사이트로 받은 알림도 함께 삭제할까요?')) await DB.delBySlot(s.slot);
+  await DB.delSite(s.slot); render();
+}
+
+$('#add').onclick = addSite; $('#q').oninput = render;
+$('#f').onclick = e => { onlyUnread = !onlyUnread; e.target.setAttribute('aria-pressed', onlyUnread); render(); };
+$('#allread').onclick = async () => { for (const m of await DB.all()) if (!m.read && (filter === 'all' || m.slot === filter)) { m.read = true; await DB.put(m); } render(); };
+const bc = new BroadcastChannel('inbox');
+bc.onmessage = e => { if (String(e.data).startsWith('open:')) filter = +e.data.slice(5); render(); };
+if (/^#\d+$/.test(location.hash)) filter = +location.hash.slice(1);
+document.addEventListener('visibilitychange', () => !document.hidden && render());
+render();
+</script></body></html>
